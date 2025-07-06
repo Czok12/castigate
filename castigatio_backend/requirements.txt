@@ -4,3 +4,15 @@ pydantic
 python-dotenv
 
 python-dateutil
+
+# Dokumentenverarbeitung & Vektor-DB
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu
+sentence-transformers
+PyMuPDF
+
+# RAG-spezifische Komponenten
+langchain-ollama
+langchain-core

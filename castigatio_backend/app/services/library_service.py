@@ -10,6 +10,21 @@ from app.models.library import BookMetadata, BookMetadataCreate
 
 
 class LibraryService:
+    def update_book_metadata(self, book_id: str, updates: dict) -> bool:
+        """Aktualisiert spezifische Felder für ein Buch."""
+        if not updates:
+            return False
+
+        updates["aktualisiert_am"] = datetime.now().isoformat()
+        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+        values = list(updates.values()) + [book_id]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"UPDATE lehrbuecher SET {set_clause} WHERE id = ?", values)
+            conn.commit()
+            return cursor.rowcount > 0
+
     def __init__(self, db_path: str = str(LIBRARY_DB_PATH)):
         self.db_path = db_path
         self._init_database()
