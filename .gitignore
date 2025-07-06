@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+
+# Virtualenv
+.venv/
+venv/
+ENV/
+
+# VSCode
+.vscode/
+
+# Dotenv
+.env
+.env.*
+
+# Mypy/Ruff
+.mypy_cache/
+.ruff_cache/
+
+# Sonstige
+.DS_Store
+.idea/
