@@ -24,6 +24,10 @@ class MergedRetriever(Runnable):
         self.book_ids = self._get_available_book_ids(book_ids)
         self.context_size = context_size
         self.vectorstores = self._load_vectorstores()
+        if not self.vectorstores:
+            raise RuntimeError(
+                "Keine gültigen Vektor-Datenbanken gefunden. Bitte den Ingestion-Prozess durchführen."
+            )
 
     def _get_available_book_ids(self, requested_ids: Optional[List[str]]) -> List[str]:
         """Gibt eine Liste gültiger, existierender Buch-IDs zurück."""
@@ -34,7 +38,12 @@ class MergedRetriever(Runnable):
 
         if requested_ids:
             # Filtere nach angefragten und existierenden IDs
-            return [book_id for book_id in requested_ids if book_id in all_dbs]
+            valid_ids = [book_id for book_id in requested_ids if book_id in all_dbs]
+            if not valid_ids:
+                print(
+                    f"WARNUNG: Keine der angefragten Buch-IDs {requested_ids} wurde gefunden. Verfügbar sind: {all_dbs}"
+                )
+            return valid_ids
         # Wenn keine IDs angefragt wurden, nutze alle verfügbaren
         return list(all_dbs)
 
@@ -58,26 +67,33 @@ class MergedRetriever(Runnable):
                     )
         return stores
 
-    def invoke(self, input: str) -> List[Document]:
+    def invoke(self, input, config=None, **kwargs) -> List[Document]:
         """Führt die Suche in allen geladenen Vektor-DBs durch und fusioniert die Ergebnisse."""
         if not self.vectorstores:
             return []
 
-        # Führe die Suche in allen Stores parallel durch (vereinfacht)
         all_results_with_scores = []
         for store in self.vectorstores:
-            results = store.similarity_search_with_score(input, k=self.context_size)
-            all_results_with_scores.extend(results)
+            try:
+                results = store.similarity_search_with_relevance_scores(
+                    input, k=self.context_size
+                )
+                all_results_with_scores.extend(results)
+            except Exception as e:
+                print(f"Fehler bei der Suche in einem Vektor-Store: {e}")
 
-        # Sortiere alle Ergebnisse nach Score (niedriger ist besser bei L2-Distanz)
-        all_results_with_scores.sort(key=lambda x: x[1])
+        # Sortiere alle Ergebnisse nach Score (höher ist besser bei Relevanz-Score)
+        all_results_with_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # Gebe die besten Ergebnisse über alle Bücher hinweg zurück
-        # Konvertiere Tupel (Document, score) zu Document
-        top_docs = [doc for doc, score in all_results_with_scores[: self.context_size]]
+        # Gebe die besten Dokumente über alle Bücher hinweg zurück
+        top_docs = []
+        for doc, score in all_results_with_scores[: self.context_size]:
+            doc.metadata["relevance_score"] = round(score, 4)
+            top_docs.append(doc)
+
         return top_docs
 
-    def format_docs(self, docs: List[Document]) -> str:
+    def _format_docs(self, docs: List[Document]) -> str:
         """Formatiert die Dokumente für den LLM-Kontext."""
         return "\n\n---\n\n".join(
             f"Quelle: {doc.metadata.get('source_file', 'Unbekannt')}, Seite: {doc.metadata.get('page', 'Unbekannt')}\n\n{doc.page_content}"
@@ -90,9 +106,19 @@ class RAGService:
         self.embedding_model = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
             model_kwargs={"device": DEVICE},
+            encode_kwargs={
+                "normalize_embeddings": False
+            },  # Cosine-Similarity funktioniert besser ohne Normalisierung
         )
         self.llm = OllamaLLM(model=LLM_MODEL)
         print("INFO: RAG-Service initialisiert.")
+
+    def _format_docs(self, docs: List[Document]) -> str:
+        """Formatiert die Dokumente für den LLM-Kontext."""
+        return "\n\n---\n\n".join(
+            f"Quelle: {doc.metadata.get('source_file', 'Unbekannt')}, Seite: {doc.metadata.get('page', 'Unbekannt')}\n\n{doc.page_content}"
+            for doc in docs
+        )
 
     def get_rag_chain(
         self, book_ids: Optional[List[str]], context_size: int
@@ -127,10 +153,7 @@ class RAGService:
         )
 
         return (
-            {
-                "context": retriever | retriever.format_docs,
-                "question": RunnablePassthrough(),
-            }
+            {"context": retriever, "question": RunnablePassthrough()}
             | prompt
             | self.llm
             | StrOutputParser()
@@ -143,24 +166,71 @@ class RAGService:
                 "Keine Vektor-Datenbanken gefunden. Bitte führen Sie zuerst den Ingestion-Prozess für mindestens ein Buch durch."
             )
 
-        rag_chain = self.get_rag_chain(request.book_ids, request.context_size)
-        answer_text = rag_chain.invoke(request.question)
-
-        # Erneuter Abruf der Dokumente, um die genauen Quellen zu erhalten
+        # Eigene RAG-Kette, um Quellen separat zu behandeln
         retriever = MergedRetriever(
-            book_ids=request.book_ids,
-            embedding_model=self.embedding_model,
-            context_size=request.context_size,
+            request.book_ids, self.embedding_model, request.context_size
         )
         retrieved_docs = retriever.invoke(request.question)
+        context_str = self._format_docs(retrieved_docs)
+
+        # Prompt manuell erstellen
+        prompt_template = """
+        Du bist ein hochqualifizierter juristischer Tutor namens 'Castigatio'. Deine Aufgabe ist es, die Frage des Studenten präzise, klar und didaktisch aufzubereiten.
+        Deine Antwort muss sich strikt und ausschließlich auf die Informationen aus dem bereitgestellten 'Kontext' (Auszüge aus einem Lehrbuch/Gesetz) stützen. Erfinde keine Fakten oder Paragraphen.
+
+        ANWEISUNGEN FÜR DIE ANTWORT:
+        1. Beginne mit einer klaren, direkten Antwort auf die Frage.
+        2. Strukturiere deine Antwort logisch in Abschnitten oder Aufzählungspunkten. Nutze Markdown für die Formatierung.
+        3. Wenn im Kontext Paragraphen (§) oder Artikel (Art.) erwähnt werden, die für die Antwort relevant sind, nenne diese explizit in deiner Antwort (z.B. "gemäß § 433 BGB...").
+        4. Wenn die Informationen im Kontext nicht ausreichen, um die Frage zu beantworten, antworte ausschließlich mit: "Die zur Beantwortung dieser Frage benötigten Informationen sind in den vorliegenden Textauszügen nicht enthalten." Gib keine allgemeinen Ratschläge.
+
+        KONTEXT:
+        {context}
+
+        FRAGE:
+        {question}
+
+        DEINE STRUKTURIERTE ANTWORT:
+        """
+        prompt = PromptTemplate(
+            template=prompt_template, input_variables=["context", "question"]
+        )
+
+        chain = prompt | self.llm | StrOutputParser()
+        answer_text = chain.invoke(
+            {"context": context_str, "question": request.question}
+        )
+
         sources = [
-            SourceDocument(content=doc.page_content, metadata=doc.metadata)
+            SourceDocument(
+                content=doc.page_content,
+                metadata=doc.metadata,
+                relevance_score=doc.metadata.get("relevance_score"),
+            )
             for doc in retrieved_docs
         ]
-
         trace_id = f"trace-{uuid.uuid4()}"
 
         return QueryResponse(answer=answer_text, sources=sources, trace_id=trace_id)
+
+    def _get_sources(
+        self, query: str, book_ids: Optional[List[str]], context_size: int
+    ) -> List[SourceDocument]:
+        """Holt die Quellen separat, um sie mit Relevanz-Scores zurückzugeben."""
+        retriever = MergedRetriever(
+            book_ids=book_ids,
+            embedding_model=self.embedding_model,
+            context_size=context_size,
+        )
+        docs = retriever.invoke(query)
+        return [
+            SourceDocument(
+                content=doc.page_content,
+                metadata=doc.metadata,
+                relevance_score=doc.metadata.get("relevance_score"),
+            )
+            for doc in docs
+        ]
 
 
 rag_service = RAGService()
