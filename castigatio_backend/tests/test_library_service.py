@@ -1,5 +1,4 @@
-"""
-Unit-Tests für LibraryService (Bibliotheksverwaltung).
+"""Unit-Tests für LibraryService (Bibliotheksverwaltung).
 Alle externen Abhängigkeiten werden gemockt.
 """
 
@@ -91,3 +90,43 @@ def test_get_all_books(service):
     assert any(
         "meyer_goßner_stpo_2021" in i or "meyer_go__ner_stpo_2021" in i for i in ids
     )
+
+
+def test_delete_book_removes_faiss_index(service, monkeypatch, tmp_path):
+    """Testet, dass beim Löschen eines Buches auch das FAISS-Index-Verzeichnis entfernt wird."""
+    import shutil
+
+    from app.core import config
+
+    # Buch anlegen
+    book = BookMetadataCreate(
+        titel="BGB AT",
+        autor="Medicus",
+        jahr=2022,
+        rechtsgebiet="Zivilrecht",
+    )
+    added = service.add_book(book)
+    book_id = added.id
+
+    # Simuliere FAISS-Index-Verzeichnis
+    faiss_dir = tmp_path / book_id
+    faiss_dir.mkdir()
+    (faiss_dir / "dummy.index").write_text("test")
+
+    # Patch FAISS_DB_PATH auf tmp_path
+    monkeypatch.setattr(config, "FAISS_DB_PATH", tmp_path)
+
+    # Patch shutil.rmtree, um Aufruf zu überwachen
+    called = {}
+
+    def fake_rmtree(path):
+        called["path"] = path
+        shutil.rmtree.__wrapped__(path)
+
+    monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
+
+    # Löschen
+    result = service.delete_book(book_id)
+    assert result is True
+    assert called["path"] == faiss_dir
+    assert not faiss_dir.exists()

@@ -1,11 +1,12 @@
 import re
+import shutil
 import sqlite3
 from datetime import datetime
 from typing import List, Optional
 
 from dateutil.parser import isoparse
 
-from app.core.config import LIBRARY_DB_PATH
+from app.core.config import FAISS_DB_PATH, LIBRARY_DB_PATH
 from app.models.library import BookMetadata, BookMetadataCreate
 
 
@@ -135,7 +136,18 @@ class LibraryService:
         return self.get_book_by_id(book_id)
 
     def delete_book(self, book_id: str) -> bool:
-        """Löscht ein Buch aus der Datenbank."""
+        """Löscht ein Buch aus der DB und den zugehörigen Vektor-Index."""
+        # Schritt 1: Vektor-Index löschen
+        index_path = FAISS_DB_PATH / book_id
+        if index_path.exists() and index_path.is_dir():
+            try:
+                shutil.rmtree(index_path)
+                print(f"INFO: Vektor-Index für Buch {book_id} gelöscht.")
+            except OSError as e:
+                print(f"FEHLER: Konnte Vektor-Index {index_path} nicht löschen: {e}")
+                # Je nach Anforderung hier False zurückgeben oder weitermachen
+
+        # Schritt 2: Datenbank-Eintrag löschen
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM lehrbuecher WHERE id = ?", (book_id,))

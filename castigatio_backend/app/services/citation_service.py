@@ -29,6 +29,7 @@ class CitationService:
             book_ids=request.book_ids,
             embedding_model=self.embedding_model,
             context_size=request.num_suggestions,
+            k_multiplier=4,  # Standardwert wie im rag_service
         )
         retrieved_docs = retriever.invoke(request.text)
 
@@ -61,7 +62,7 @@ class CitationService:
         book_id = metadata.get("book_id")
         page = metadata.get("page")
 
-        book = library_service.get_document_by_id(book_id) if book_id else None
+        book = library_service.get_book_by_id(book_id) if book_id else None
 
         if not book:
             source_file = metadata.get("source_file", "Unbekannte Quelle")

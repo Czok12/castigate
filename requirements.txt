@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic
 python-dotenv
+
 python-dateutil
 
 # Dokumentenverarbeitung & Vektor-DB
@@ -12,8 +13,6 @@ faiss-cpu
 sentence-transformers
 PyMuPDF
 
-# Für erweiterte Analyse und Reranking
-scikit-learn
-
-# Für performantes Caching
-diskcache
+# RAG-spezifische Komponenten
+langchain-ollama
+langchain-core

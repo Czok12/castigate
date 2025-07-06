@@ -3,6 +3,23 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class AnswerQualityMetrics(BaseModel):
+    """Metriken zur Bewertung der Antwortqualität."""
+
+    confidence_score: float = Field(
+        ..., description="Gesamt-Konfidenzwert zwischen 0.0 und 1.0."
+    )
+    source_reliability: float = Field(
+        ..., description="Bewertung der Zuverlässigkeit der Quellen."
+    )
+    answer_relevance: float = Field(
+        ..., description="Bewertung der Relevanz der Antwort zur Frage."
+    )
+    citation_quality: float = Field(
+        ..., description="Bewertung der Qualität der Zitationen in der Antwort."
+    )
+
+
 class QueryRequest(BaseModel):
     """Anfragemodell für eine RAG-Query."""
 
@@ -35,6 +52,7 @@ class QueryResponse(BaseModel):
 
     answer: str
     sources: List[SourceDocument]
+    quality: AnswerQualityMetrics  # <-- NEU
     trace_id: str = Field(
         ..., description="Eine eindeutige ID zur Nachverfolgung dieser Anfrage."
     )
